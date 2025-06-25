@@ -48,17 +48,3 @@ A Flask-based backend system that automatically detects, logs, and provides AI-p
 ---
 
 **Built with ❤️ by Siddhanta Mohanty**
-
-self-healing-system/
-│
-├── db_app.py               # Flask backend with error handling
-├── chatbot_frontend.py     # Chatbot frontend (Streamlit)
-├── frontend_streamlit.py   # Dashboard to view/add employees
-├── notify_slack.py         # Slack notification helper
-├── llm.py                  # LangChain + OpenAI integration
-├── error_vectordb.py       # FAISS vector store functions
-├── requirements.txt        # Dependency list
-├── .env.example            # Environment variable template
-├── README.md               # Project documentation
-└── faiss_index/            # Vector DB files
-
