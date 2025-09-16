@@ -1,7 +1,7 @@
 🔧 **Self-Healing Database**
 💡 An AI-powered system that doesn't just log errors—it understands them, explains them, and helps you fix them.
 🚀 Overview
-In today’s fast-paced development world, error logs alone aren’t enough. You need intelligence, speed, and self-recovery—and that’s exactly what this project delivers.
+In today's fast-paced development world, error logs alone aren't enough. You need intelligence, speed, and self-recovery—and that's exactly what this project delivers.
 
 The Self-Healing Database Backend is a full-stack AI-driven error-handling system that reimagines how modern apps detect, understand, and recover from database failures.
 
@@ -15,7 +15,7 @@ Instead of simply printing errors to a terminal or storing them in a log file, t
 
 💬 Let users chat with an AI assistant to dig deeper into recurring or unresolved issues
 
-It’s like having a personal debugging assistant, available 24/7.
+It's like having a personal debugging assistant, available 24/7.
 
 ✨ **Why This Project?**
 Traditional backend systems are reactive—they crash, log an error, and leave the debugging to you. This project flips the paradigm with a proactive, AI-augmented solution:
@@ -127,10 +127,60 @@ Personal portfolio to showcase full-stack + AI integration skills
 - **API Rate Limiting**: Production-ready security controls
 - **Docker Deployment**: Containerized deployment with docker-compose
 
+## 🔧 **Debugging & Issue Resolution**
 
+### **Real-World Problem: Cascading Database Timeouts**
 
-🧑‍💻 Developer’s Note
-This project is built with ❤️ and a learner’s mindset. The goal isn’t just to create a working app—but to understand every component deeply: from PostgreSQL locking to vector retrieval and LLM behavior. If you’re an aspiring backend engineer, ML developer, or just an automation enthusiast, this system shows what’s possible when traditional systems meet modern AI.
+**The Issue:**
+During development, we encountered cascading timeout errors that the AI initially misdiagnosed as missing database indexes. The system was experiencing:
+- Connection pool exhaustion
+- Silent row lock contention
+- Cascading failures across multiple endpoints
+
+**Debugging Process:**
+
+1. **Local Reproduction:**
+   ```bash
+   # Reproduce the issue locally
+   python3 db_app.py
+   # Trigger multiple concurrent requests to cause lock contention
+   ```
+
+2. **Added Monitoring & Tracing:**
+   ```python
+   # Set lock timeout to prevent long waits
+   cur.execute("SET lock_timeout = '5s';")
+   
+   # Enhanced error logging with context
+   INSERT INTO error_logs (error_code, error_message, source, created_at)
+   VALUES ('LOCK_CONTENTION', error_msg, 'add_employee', NOW());
+   ```
+
+3. **Root Cause Analysis:**
+   - **Problem**: Background processes holding row locks too long
+   - **Symptom**: Connection pool starvation causing timeouts
+   - **Impact**: AI misdiagnosed as indexing issues
+
+4. **Solution Implemented:**
+   - **Exponential backoff** with bounded retries
+   - **Lock timeout** configuration (`SET lock_timeout = '5s'`)
+   - **Query fingerprinting** to deduplicate similar errors
+   - **Enhanced error categorization** for lock contention
+
+**Key Learnings:**
+- Always reproduce issues locally before fixing
+- Monitor connection pool metrics during debugging
+- Implement proper timeout handling from the start
+- Use error categorization to prevent alert storms
+
+**Tools Used:**
+- PostgreSQL query logs
+- Flask error handlers
+- Slack notifications for real-time monitoring
+- FAISS vector store for error pattern matching
+
+🧑‍💻 Developer's Note
+This project is built with ❤️ and a learner's mindset. The goal isn't just to create a working app—but to understand every component deeply: from PostgreSQL locking to vector retrieval and LLM behavior. If you're an aspiring backend engineer, ML developer, or just an automation enthusiast, this system shows what's possible when traditional systems meet modern AI.
 
 ## 🚀 Quickstart
 
