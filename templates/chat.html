@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-Healing Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>💬 Self-Healing Assistant</h1>
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/chat">Chatbot</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Ask about your errors</h2>
+        <form id="chat-form">
+          <textarea name="question" placeholder="Ask about an error, database stats, or employees…" rows="4" required></textarea>
+          <label class="checkbox">
+            <input type="checkbox" name="include_recent" checked /> Include recent error logs as context
+          </label>
+          <button type="submit">Send</button>
+        </form>
+        <div id="answer" class="answer"></div>
+      </section>
+      
+      <section class="card">
+        <h2>Database Query (Read-Only)</h2>
+        <form id="query-form">
+          <textarea name="query" placeholder="SELECT COUNT(*) FROM employee;" rows="3" required></textarea>
+          <button type="submit">Execute Query</button>
+        </form>
+        <div id="query-result" class="answer"></div>
+      </section>
+    </main>
+
+    <script>
+      async function sendChat(ev) {
+        ev.preventDefault();
+        const fd = new FormData(ev.target);
+        const payload = {
+          question: fd.get('question'),
+          include_recent: fd.get('include_recent') === 'on'
+        };
+        const ans = document.getElementById('answer');
+        ans.textContent = 'Thinking…';
+        try {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const body = await res.json();
+          if (res.ok) {
+            ans.textContent = body.answer;
+          } else {
+            ans.textContent = `❌ ${body.error || 'chat failed'}`;
+          }
+        } catch (e) {
+          ans.textContent = `❌ ${e}`;
+        }
+      }
+
+      async function executeQuery(ev) {
+        ev.preventDefault();
+        const fd = new FormData(ev.target);
+        const payload = { query: fd.get('query') };
+        const result = document.getElementById('query-result');
+        result.textContent = 'Executing…';
+        try {
+          const res = await fetch('/api/db-query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const body = await res.json();
+          if (res.ok) {
+            const data = JSON.stringify(body.result, null, 2);
+            result.textContent = `Rows: ${body.row_count}\n\n${data}`;
+          } else {
+            result.textContent = `❌ ${body.error || 'query failed'}`;
+          }
+        } catch (e) {
+          result.textContent = `❌ ${e}`;
+        }
+      }
+
+      document.getElementById('chat-form').addEventListener('submit', sendChat);
+      document.getElementById('query-form').addEventListener('submit', executeQuery);
+    </script>
+  </body>
+</html>

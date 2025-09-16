@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, url_for
 import psycopg2
 from psycopg2 import errorcodes
 import psycopg2.extras
@@ -12,7 +12,7 @@ load_dotenv()   # populates os.environ["OPENAI_API_KEY"] from .env
 from langchain_openai import OpenAIEmbeddings
 import os
 
-CHATBOT_URL = os.getenv("CHATBOT_URL", "http://localhost:8502")
+CHATBOT_URL = os.getenv("CHATBOT_URL", "http://127.0.0.1:5000/chat")
 
 from flask_cors import CORS
 app = Flask(__name__)
@@ -31,20 +31,194 @@ def send_slack_message(message: str):   # Function to send messages to Slack
     except Exception as e:
         print("Slack webhook failed:", e)
 
+def categorize_error(error_msg: str, error_code: str = "UNKNOWN"):
+    """Smart error categorization with pattern matching"""
+    error_lower = error_msg.lower()
+    
+    # Common database patterns
+    if "duplicate key" in error_lower or "unique constraint" in error_lower:
+        return "DUPLICATE_DATA", "LOW", True
+    elif "connection" in error_lower or "timeout" in error_lower or "connection refused" in error_lower:
+        return "CONNECTION_ISSUE", "HIGH", True
+    elif "lock" in error_lower or "deadlock" in error_lower or "lock not available" in error_lower:
+        return "LOCK_CONTENTION", "MEDIUM", False
+    elif "permission" in error_lower or "access denied" in error_lower or "insufficient privilege" in error_lower:
+        return "PERMISSION_ERROR", "HIGH", False
+    elif "syntax" in error_lower or "invalid" in error_lower or "malformed" in error_lower:
+        return "QUERY_SYNTAX", "MEDIUM", False
+    elif "foreign key" in error_lower or "constraint" in error_lower:
+        return "CONSTRAINT_VIOLATION", "MEDIUM", False
+    elif "out of memory" in error_lower or "memory" in error_lower:
+        return "RESOURCE_EXHAUSTION", "HIGH", False
+    else:
+        return "UNKNOWN", "MEDIUM", False
 
-conn = psycopg2.connect(    # Connect to PostgreSQL database
-    dbname="self_healing_app",
-    user="siddhantamohanty",
-    password="",      
-    host="localhost",
-    port="5432"
-)
+def get_category_specific_prompt(category: str, error_msg: str):
+    """Provide tailored prompts for different error types"""
+    
+    prompts = {
+        "DUPLICATE_DATA": f"""
+        You are a database expert specializing in data integrity. This is a duplicate data error: {error_msg}
+        
+        Provide a comprehensive response including:
+        1. Clear explanation of why this duplicate key violation occurred
+        2. Immediate fix options (check existing data, suggest unique values, handle gracefully)
+        3. Prevention strategy (input validation, database constraints, application logic)
+        4. Business impact assessment and best practices
+        5. Code examples for handling duplicates in the application
+        
+        Be specific and actionable. Focus on both immediate resolution and long-term prevention.
+        """,
+        
+        "CONNECTION_ISSUE": f"""
+        You are a database administrator with expertise in infrastructure. This is a connection error: {error_msg}
+        
+        Provide a detailed analysis including:
+        1. Root cause analysis of the connection failure
+        2. Immediate troubleshooting steps (check network, credentials, firewall)
+        3. Infrastructure recommendations (connection pooling, retry logic, monitoring)
+        4. Monitoring and alerting suggestions
+        5. Performance optimization tips for database connections
+        
+        Focus on both immediate resolution and system reliability improvements.
+        """,
+        
+        "LOCK_CONTENTION": f"""
+        You are a database performance expert. This is a locking issue: {error_msg}
+        
+        Provide expert guidance including:
+        1. Why locks are happening (concurrent transactions, long-running queries)
+        2. Short-term workarounds (retry logic, timeout adjustments)
+        3. Long-term optimization strategies (query optimization, indexing, transaction design)
+        4. Query performance tips and best practices
+        5. Monitoring queries to identify lock patterns
+        
+        Emphasize both immediate fixes and performance improvements.
+        """,
+        
+        "PERMISSION_ERROR": f"""
+        You are a database security expert. This is a permission error: {error_msg}
+        
+        Provide security-focused guidance including:
+        1. Analysis of the permission/access issue
+        2. Immediate resolution steps (check user roles, grant permissions)
+        3. Security best practices (principle of least privilege, role-based access)
+        4. Audit and monitoring recommendations
+        5. Long-term security strategy
+        
+        Focus on both immediate access restoration and security hardening.
+        """,
+        
+        "QUERY_SYNTAX": f"""
+        You are a SQL expert. This is a query syntax error: {error_msg}
+        
+        Provide technical guidance including:
+        1. Analysis of the syntax issue
+        2. Corrected query examples
+        3. Common SQL pitfalls and how to avoid them
+        4. Query optimization tips
+        5. Best practices for SQL development
+        
+        Be technical but clear, with practical examples.
+        """,
+        
+        "CONSTRAINT_VIOLATION": f"""
+        You are a database design expert. This is a constraint violation: {error_msg}
+        
+        Provide comprehensive guidance including:
+        1. Analysis of the constraint violation
+        2. Immediate resolution options
+        3. Database design best practices
+        4. Data integrity strategies
+        5. Application-level validation recommendations
+        
+        Focus on both immediate fixes and robust data modeling.
+        """,
+        
+        "RESOURCE_EXHAUSTION": f"""
+        You are a database performance and infrastructure expert. This is a resource exhaustion error: {error_msg}
+        
+        Provide expert analysis including:
+        1. Root cause analysis of resource exhaustion
+        2. Immediate mitigation strategies
+        3. Infrastructure scaling recommendations
+        4. Query optimization for resource efficiency
+        5. Monitoring and alerting for resource usage
+        
+        Emphasize both immediate relief and long-term scalability.
+        """,
+        
+        "UNKNOWN": f"""
+        You are a general database expert. This is an unknown error: {error_msg}
+        
+        Provide comprehensive guidance including:
+        1. General analysis and possible causes
+        2. Systematic debugging approach
+        3. When to escalate to senior team members
+        4. Documentation and logging recommendations
+        5. General troubleshooting best practices
+        
+        Be thorough and methodical in your approach.
+        """
+    }
+    
+    return prompts.get(category, prompts["UNKNOWN"])
+
+def handle_error_intelligently(error_msg: str, error_code: str, source: str = "unknown"):
+    """Smart error handling with category-aware responses"""
+    
+    # Step 1: Categorize the error
+    category, severity, auto_fixable = categorize_error(error_msg, error_code)
+    
+    # Step 2: Get tailored explanation from LLM
+    try:
+        explanation = qa.run(get_category_specific_prompt(category, error_msg))
+    except Exception as e:
+        explanation = f"Error analysis failed: {str(e)}"
+    
+    # Step 3: Send enhanced Slack message
+    emoji_map = {
+        "LOW": "🟡",
+        "MEDIUM": "🟠", 
+        "HIGH": "🔴"
+    }
+    
+    send_slack_message(f"""
+{emoji_map.get(severity, "⚠️")} *{category} Error* (Severity: {severity})
+*Error Code:* `{error_code}`
+*Source:* `{source}`
+*Error Details:* `{error_msg}`
+*Auto-fixable:* {'Yes' if auto_fixable else 'No'}
+
+*Expert Analysis:*
+{explanation}
+
+💬 *Need more help?* <{CHATBOT_URL}|Open the Self-Healing Chatbot>
+    """)
+    
+    return category, severity, auto_fixable
+
+
+db_url = os.getenv("DATABASE_URL")
+if db_url:
+    # Normalize SQLAlchemy-style URL to psycopg2-compatible
+    if db_url.startswith("postgresql+psycopg2://"):
+        db_url = db_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    conn = psycopg2.connect(db_url)
+else:
+    conn = psycopg2.connect(    # Fallback local development settings
+        dbname="self_healing_app",
+        user="siddhantamohanty",
+        password="",
+        host="localhost",
+        port="5432"
+    )
 with conn.cursor() as cur:
     cur.execute("SET lock_timeout = '5s';")  # Set a lock timeout to avoid long waits on locks
 
 embedder = OpenAIEmbeddings(
      model="text-embedding-3-small",
-     openai_api_key=os.environ["OPENAI_API_KEY"],
+     api_key=os.environ["OPENAI_API_KEY"],
 )
 
 def load_or_create_vectorstore(embedder):
@@ -58,11 +232,79 @@ vectorstore = load_or_create_vectorstore(embedder)
 llm = ChatOpenAI(
      model="gpt-3.5-turbo",
      temperature=0.2,
-     openai_api_key=os.environ["OPENAI_API_KEY"],
+     api_key=os.environ["OPENAI_API_KEY"],
 )
 
 qa = RetrievalQA.from_chain_type(llm=llm, retriever=vectorstore.as_retriever())   #pipeline to query the vector store and get answers from the LLM
 
+
+@app.route('/')
+def root():
+    return render_template('index.html')
+
+@app.route('/chat')
+def chat_page():
+    return render_template('chat.html')
+
+@app.route('/api/chat', methods=['POST'])
+def chat_api():
+    payload = request.get_json() or {}
+    question = payload.get('question', '')
+    include_recent = bool(payload.get('include_recent', True))
+
+    if not question:
+        return jsonify({"error": "question is required"}), 400
+
+    # Get database context for intelligent responses
+    db_context = ""
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Get employee count
+            cur.execute("SELECT COUNT(*) as employee_count FROM employee;")
+            emp_count = cur.fetchone()['employee_count']
+            
+            # Get recent employees
+            cur.execute("SELECT name, email, department FROM employee ORDER BY id DESC LIMIT 5;")
+            recent_emps = cur.fetchall()
+            
+            # Get error statistics
+            cur.execute("SELECT COUNT(*) as error_count FROM error_logs;")
+            error_count = cur.fetchone()['error_count']
+            
+            # Get recent errors
+            cur.execute("""
+                SELECT id, error_code, error_message, source, created_at
+                FROM error_logs
+                ORDER BY id DESC
+                LIMIT 10;
+            """)
+            recent_errors = cur.fetchall()
+            
+            db_context = f"""Database Context:
+- Total employees: {emp_count}
+- Total errors logged: {error_count}
+- Recent employees: {[dict(emp) for emp in recent_emps]}
+- Recent errors: {[dict(err) for err in recent_errors]}
+"""
+    except Exception as e:
+        db_context = f"Database context unavailable: {str(e)}"
+
+    # Enhanced system prompt for better responses
+    system_prompt = """You are a helpful database assistant for a self-healing system. You can:
+1. Answer questions about database errors and their solutions
+2. Provide statistics about employees and error logs
+3. Explain database concepts and troubleshooting steps
+4. Help with data analysis and insights
+
+Always be helpful, accurate, and provide actionable advice. If you need specific data, mention that the user can ask for database queries."""
+
+    composed_question = f"{system_prompt}\n\n{db_context}\n\nUser question: {question}"
+
+    try:
+        answer = qa.run(composed_question)
+        return jsonify({"answer": answer}), 200
+    except Exception as e:
+        return jsonify({"error": f"chat failed: {e}"}), 500
 
 @app.route('/employees', methods=['GET'])
 def get_employees():    # view records of all employees
@@ -105,15 +347,10 @@ def add_employee():  # add a new employee to the database
         vectorstore.add_documents([doc])   
         vectorstore.save_local("faiss_index")  
 
-        explanation = qa.run(error_msg) 
+        # Use intelligent error handling
+        category, severity, auto_fixable = handle_error_intelligently(error_msg, "DUPLICATE_KEY", "add_employee")
 
-        send_slack_message(   #Format for which the error message will be sent to Slack
-            f" *New Error:* `{error_msg}`\n"
-            f" *Explanation & Fix:* {explanation}"
-            f"➡️  *Need more help?* <{CHATBOT_URL}|Open the Self-Healing Chatbot>"
-        )
-
-        return jsonify({"error": "Duplicate email. Logged in error_logs."}), 409   # Conflict
+        return jsonify({"error": "Duplicate email. Logged in error_logs.", "category": category, "severity": severity}), 409   # Conflict
 
     except psycopg2.errors.LockNotAvailable as e:  # Handle table lock error
         conn.rollback()
@@ -136,15 +373,10 @@ def add_employee():  # add a new employee to the database
         vectorstore.add_documents([doc])
         vectorstore.save_local("faiss_index")
 
-        explanation = qa.run(error_msg)
+        # Use intelligent error handling
+        category, severity, auto_fixable = handle_error_intelligently(error_msg, error_code, "add_employee")
 
-        send_slack_message(
-            f"*New Error:* `{error_msg}`\n"
-            f"*Explanation & Fix:* {explanation}"
-            f"➡️  *Need more help?* <{CHATBOT_URL}|Open the Self-Healing Chatbot>"        
-        )
-
-        return jsonify({"error": "Table is locked by another transaction."}), 503 # Service Unavailable
+        return jsonify({"error": "Table is locked by another transaction.", "category": category, "severity": severity}), 503 # Service Unavailable
 
     except Exception as e:   # Handle any other unexpected exceptions
         conn.rollback()
@@ -163,13 +395,47 @@ def add_employee():  # add a new employee to the database
         vectorstore.add_documents([doc])
         vectorstore.save_local("faiss_index")
 
-        explanation = qa.run(error_msg)
-        send_slack_message(
-            f"*New Error* **[{error_code}]** ```{error_msg}```\n"
-            f"*Explanation & Fix:* {explanation}"
-            f"➡️  *Need more help?* <{CHATBOT_URL}|Open the Self-Healing Chatbot>"
-        )
-        return jsonify({"error": f"Unexpected error: {e}"}), 500   # Internal Server Error
+        # Use intelligent error handling
+        category, severity, auto_fixable = handle_error_intelligently(error_msg, error_code, "add_employee")
+        
+        return jsonify({"error": f"Unexpected error: {e}", "category": category, "severity": severity}), 500   # Internal Server Error
+
+# API aliases used by the new frontend (keeps legacy routes too)
+@app.route('/api/employees', methods=['GET'])
+def api_get_employees():
+    return get_employees()
+
+@app.route('/api/employees', methods=['POST'])
+def api_add_employee():
+    return add_employee()
+
+@app.route('/api/db-query', methods=['POST'])
+def db_query():
+    """Execute read-only database queries for chatbot intelligence"""
+    payload = request.get_json() or {}
+    query = payload.get('query', '').strip()
+    
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+    
+    # Security: Only allow SELECT queries
+    if not query.upper().startswith('SELECT'):
+        return jsonify({"error": "Only SELECT queries are allowed"}), 400
+    
+    # Additional security: Block dangerous keywords
+    dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE', 'EXEC', 'EXECUTE']
+    if any(keyword in query.upper() for keyword in dangerous_keywords):
+        return jsonify({"error": "Query contains forbidden keywords"}), 400
+    
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+            # Convert to list of dicts for JSON serialization
+            result = [dict(row) for row in rows]
+            return jsonify({"result": result, "row_count": len(result)}), 200
+    except Exception as e:
+        return jsonify({"error": f"Query failed: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)  
