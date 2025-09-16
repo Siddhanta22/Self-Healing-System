@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-Healing Database</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>🔧 Self-Healing Database</h1>
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/chat">Chatbot</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>📋 Employee Records</h2>
+        <div id="employees"></div>
+      </section>
+
+      <section class="card">
+        <h2>➕ Add Employee</h2>
+        <form id="add-form">
+          <div class="grid">
+            <label>
+              Name
+              <input name="name" required />
+            </label>
+            <label>
+              Email
+              <input name="email" type="email" required />
+            </label>
+            <label>
+              Department
+              <input name="department" required />
+            </label>
+          </div>
+          <button type="submit">Submit</button>
+          <span id="form-status"></span>
+        </form>
+      </section>
+    </main>
+
+    <script>
+      async function fetchEmployees() {
+        const res = await fetch('/api/employees');
+        const data = await res.json();
+        const container = document.getElementById('employees');
+        if (!Array.isArray(data) || data.length === 0) {
+          container.innerHTML = '<p>No records yet.</p>';
+          return;
+        }
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        thead.innerHTML = '<tr><th>ID</th><th>Name</th><th>Email</th><th>Department</th></tr>';
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        data.forEach(r => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${r.id ?? ''}</td><td>${r.name}</td><td>${r.email}</td><td>${r.department}</td>`;
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        document.getElementById('employees').innerHTML = '';
+        document.getElementById('employees').appendChild(table);
+      }
+
+      async function addEmployee(ev) {
+        ev.preventDefault();
+        const fd = new FormData(ev.target);
+        const payload = Object.fromEntries(fd.entries());
+        const statusEl = document.getElementById('form-status');
+        statusEl.textContent = 'Submitting…';
+        try {
+          const res = await fetch('/api/employees', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (res.status === 201) {
+            statusEl.textContent = '✅ Added';
+            ev.target.reset();
+            fetchEmployees();
+          } else {
+            const body = await res.json().catch(() => ({}));
+            const category = body.category ? ` (${body.category})` : '';
+            const severity = body.severity ? ` [${body.severity}]` : '';
+            statusEl.textContent = `⚠️ ${body.error || 'Failed'}${category}${severity}`;
+          }
+        } catch (e) {
+          statusEl.textContent = `❌ ${e}`;
+        }
+      }
+
+      document.getElementById('add-form').addEventListener('submit', addEmployee);
+      fetchEmployees();
+    </script>
+  </body>
+</html>
