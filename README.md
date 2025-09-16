@@ -30,7 +30,39 @@ Traditional backend systems are reactive—they crash, log an error, and leave t
 
 🧰 Seamlessly fits into existing development workflows using REST APIs and modular architecture
 
-It’s not just about logging errors—it’s about healing your system intelligently.
+It's not just about logging errors—it's about healing your system intelligently.
+
+## 🏗️ **System Architecture**
+
+```mermaid
+graph TD
+    A[Client] --> B[Application Layer<br/>Frontend + Backend]
+    B --> C[View / Update Records]
+    B --> D[DBMS<br/>PostgreSQL]
+    B --> E[Error Logger]
+    D --> E
+    E --> F[Vector DB<br/>FAISS]
+    F --> G[Embedded error msg]
+    F --> H[LLM API<br/>OpenAI GPT-3.5]
+    H --> I[Explain this error]
+    H --> J[Slack Alert<br/>Notification & Fix]
+    
+    style A fill:#e1f5fe
+    style B fill:#f3e5f5
+    style D fill:#e8f5e8
+    style E fill:#fff3e0
+    style F fill:#fce4ec
+    style H fill:#e0f2f1
+    style J fill:#f1f8e9
+```
+
+### **Pipeline Flow:**
+1. **Set up the application** (frontend + backend) connected to PostgreSQL
+2. **Handle database operations** (view/update) and use error loggers to catch real-time errors
+3. **Store embedding** of these error messages
+4. **Convert errors into vector embeddings** and store them in a Vector DB
+5. **Use an LLM API** to convert technical errors into plain English + solution
+6. **Send the response to Slack** with explanation and fix
 
 🔍** Core Capabilities**
 Feature	Description
