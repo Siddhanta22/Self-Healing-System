@@ -1,10 +1,10 @@
 flask==2.3.3
 psycopg2-binary==2.9.7
 requests==2.31.0
-langchain-openai==0.3.33
-langchain==0.3.27
-langchain-community==0.3.27
-langchain-core==0.3.83
+langchain-openai==1.1.7
+langchain==1.2.8
+langchain-community==0.4.1
+langchain-core==1.2.8
 faiss-cpu==1.7.4
 numpy<2
 python-dotenv==1.0.0
