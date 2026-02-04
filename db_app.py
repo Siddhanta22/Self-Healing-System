@@ -4,9 +4,11 @@ from psycopg2 import errorcodes
 import psycopg2.extras
 import requests
 from langchain_openai import ChatOpenAI
-from langchain.chains import RetrievalQA
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from dotenv import load_dotenv   #Loads OpenAI API Key & Slack Webhook from .env
 load_dotenv()   # populates os.environ["OPENAI_API_KEY"] from .env
 from langchain_openai import OpenAIEmbeddings
@@ -235,7 +237,36 @@ llm = ChatOpenAI(
      api_key=os.environ["OPENAI_API_KEY"],
 )
 
-qa = RetrievalQA.from_chain_type(llm=llm, retriever=vectorstore.as_retriever())   #pipeline to query the vector store and get answers from the LLM
+# Create RAG chain using LCEL (replaces deprecated RetrievalQA)
+retriever = vectorstore.as_retriever()
+template = """Answer the question based only on the following context. If you cannot answer the question using the context, say so.
+
+Context: {context}
+
+Question: {question}
+
+Answer:"""
+prompt = ChatPromptTemplate.from_template(template)
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+qa = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# Create a wrapper to maintain compatibility with qa.run() calls
+class QARunner:
+    def __init__(self, chain):
+        self.chain = chain
+    
+    def run(self, query):
+        return self.chain.invoke(query)
+
+qa = QARunner(qa)
 
 
 @app.route('/')
