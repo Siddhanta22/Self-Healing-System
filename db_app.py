@@ -14,7 +14,7 @@ load_dotenv()   # populates os.environ["OPENAI_API_KEY"] from .env
 from langchain_openai import OpenAIEmbeddings
 import os
 
-CHATBOT_URL = os.getenv("CHATBOT_URL", "http://127.0.0.1:5000/chat")
+CHATBOT_URL = os.getenv("CHATBOT_URL", "http://localhost:8502")
 
 from flask_cors import CORS
 app = Flask(__name__)
