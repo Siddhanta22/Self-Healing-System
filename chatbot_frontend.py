@@ -41,6 +41,17 @@ Critical facts:
   substring(error_message from 'Key \\(email\\)=\\(([^)]+)\\)')
 - there is NO salary column
 - common error_code values: DUPLICATE_KEY, LOCK_NOT_AVAILABLE, UNEXPECTED_EXCEPTION
+- this app writes errors from the add_employee flow
+- PostgreSQL lock issues often appear as LOCK_NOT_AVAILABLE or messages containing "lock"
+- "current transaction is aborted" usually means a prior statement failed and the transaction needs ROLLBACK before retrying
+"""
+
+PLAYBOOK = """
+Debugging playbooks (use when user asks what to do, even if logs are empty):
+- Table lock / lock timeout: retry after a few seconds; end stuck transactions (ROLLBACK); avoid long open transactions; check concurrent writes to employee; this backend sets lock_timeout=5s.
+- Duplicate email: email must be unique in employee; use a different email or update the existing row; check error_logs + employee for the conflicting address.
+- Aborted transaction: run ROLLBACK in the session; fix the first failing statement; retry the operation.
+- Foreign key / constraint: verify referenced rows exist before insert; align app validation with DB constraints.
 """
 
 GREETING_PROMPT = """{system_context}
@@ -60,28 +71,32 @@ Conversation:
 
 User question: {question}
 
-Write SQL to answer this question using live data from employee and/or error_logs.
+Write SQL to gather evidence needed to answer the question.
 Return ONLY valid JSON:
 {{"queries": ["SELECT ...", "..."]}}
 
 Rules:
-- 1 to 3 SELECT queries only
+- 1 to 3 SELECT queries only; every query must be directly relevant to the user's question
 - use created_at for time filtering/sorting on error_logs
+- for "what do I do if X" / troubleshooting: first check error_logs for X-related rows (error_code and/or error_message)
 - for "recent errors", select id, error_code, severity, source, created_at, error_message (no unnecessary filters)
-- for duplicate-email frequency, extract email from error_message (not from source)
-- for lock issues, filter error_message or error_code
+- for duplicate-email questions, extract email from error_message (not from source)
+- for lock questions, filter error_code = 'LOCK_NOT_AVAILABLE' OR error_message ILIKE '%lock%'
+- do NOT query unrelated error types (e.g. do not fetch duplicate-key stats when user asks about locks)
 - never invent column names
 {extra}
 """
 
 SYNTHESIS_PROMPT = """{system_context}
 
+{playbook}
+
 Conversation:
 {history}
 
 User question: {question}
 
-You already ran SQL for the user. Present the answer now.
+You already ran SQL for the user. Write the final answer.
 
 Queries executed:
 {queries}
@@ -89,20 +104,31 @@ Queries executed:
 Raw results:
 {results}
 
-Write the final answer for the user.
+Structure the answer with these sections (omit empty ones):
+
+**What I found in your database**
+- Only discuss query results relevant to the user's question
+- Ignore unrelated rows even if they were returned
+- If no matching rows: say clearly that no relevant errors were found in error_logs (or employee) for this scenario
+
+**What it means**
+- Explain the situation in plain English using the evidence above
+
+**What to do**
+- Always give practical fix/debugging steps for the scenario the user asked about
+- If logs show no matching errors, say that and still explain how to handle/prevent the issue in this app
+- Tie advice to this schema (employee, error_logs, add_employee) when helpful
 
 REQUIRED:
-- answer directly using the result rows (counts, emails, error codes, dates)
-- when multiple rows are returned, list each row with its key fields
-- explain cause and fix when debugging
+- combine live DB evidence with actionable guidance
+- when multiple relevant rows exist, list key fields (id, error_code, created_at, message snippet)
 - be concise and specific
 
 FORBIDDEN:
 - do NOT tell the user to run SQL
+- do NOT pivot to unrelated errors (e.g. duplicate-key stats when user asked about locks)
 - do NOT say "if you run a query" or "you can run"
-- do NOT say data is unavailable when results are shown above
-- do NOT give generic monitoring advice without evidence from results
-- do NOT include SQL blocks unless briefly noting what you already checked
+- do NOT give vague monitoring-only advice without concrete steps
 """
 
 FIX_SQL_PROMPT = """{system_context}
@@ -215,6 +241,7 @@ def synthesize_response(
     answer = llm.invoke(
         SYNTHESIS_PROMPT.format(
             system_context=SYSTEM_CONTEXT,
+            playbook=PLAYBOOK,
             history=history,
             question=question,
             queries="\n".join(queries),
@@ -226,12 +253,13 @@ def synthesize_response(
         answer = llm.invoke(
             SYNTHESIS_PROMPT.format(
                 system_context=SYSTEM_CONTEXT,
+                playbook=PLAYBOOK,
                 history=history,
                 question=question,
                 queries="\n".join(queries),
                 results=bundle_results(queries, results),
             )
-            + "\n\nRewrite without telling the user to run SQL. Present the findings directly."
+            + "\n\nRewrite without telling the user to run SQL. Present findings and fix steps directly."
         ).content
 
     return answer
@@ -273,12 +301,35 @@ def get_reply(prompt: str, history_messages: list[tuple[str, str]]) -> str:
             executed, results = run_queries(retry_queries)
 
     if not executed:
-        return (
-            "I tried to query the database but couldn't retrieve results for that question. "
-            f"Details: {'; '.join(results)}"
-        )
+        return synthesize_advisory_response(prompt, history, results)
 
     return synthesize_response(prompt, history, executed, results)
+
+
+def synthesize_advisory_response(
+    question: str, history: str, errors: list[str]
+) -> str:
+    """Answer with playbook guidance when SQL could not be executed."""
+    return llm.invoke(
+        f"""{SYSTEM_CONTEXT}
+
+{PLAYBOOK}
+
+Conversation:
+{history}
+
+User question: {question}
+
+Database query attempt failed: {'; '.join(errors)}
+
+Still help the user with:
+1. What the issue usually means in PostgreSQL / this app
+2. Practical steps to fix or prevent it
+3. What to check in error_logs or employee when the database is available again
+
+Do not tell the user to run SQL themselves.
+"""
+    ).content
 
 
 st.set_page_config(page_title="Self-Healing Chatbot", page_icon="💬")
