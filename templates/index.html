@@ -8,21 +8,41 @@
   </head>
   <body>
     <header class="app-header">
-      <h1>🔧 Self-Healing Database</h1>
+      <h1>Self-Healing Database</h1>
       <nav>
         <a href="/">Dashboard</a>
-        <a href="/chat">Chatbot</a>
       </nav>
     </header>
 
     <main class="container">
+      <div class="stats" id="stats">
+        <div class="stat">
+          <div class="stat-label">Employees</div>
+          <div class="stat-value" id="stat-employees">–</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Errors Logged</div>
+          <div class="stat-value" id="stat-errors">–</div>
+        </div>
+        <div class="stat accent-err">
+          <div class="stat-label">High Severity</div>
+          <div class="stat-value" id="stat-high">–</div>
+        </div>
+        <div class="stat accent-ok">
+          <div class="stat-label">Auto-fixable</div>
+          <div class="stat-value" id="stat-autofix">–</div>
+        </div>
+      </div>
+
       <section class="card">
-        <h2>📋 Employee Records</h2>
+        <h2>Employee Records</h2>
+        <p class="subtitle">Live view of everyone in the system.</p>
         <div id="employees"></div>
       </section>
 
       <section class="card">
-        <h2>➕ Add Employee</h2>
+        <h2>Add Employee</h2>
+        <p class="subtitle">New records are validated and error-checked in real time.</p>
         <form id="add-form">
           <div class="grid">
             <label>
@@ -42,30 +62,109 @@
           <span id="form-status"></span>
         </form>
       </section>
+
+      <section class="card">
+        <h2>Recent Errors &amp; Diagnostics</h2>
+        <p class="subtitle">Every failure is categorized, scored for severity, and checked for auto-fixability.</p>
+        <div id="errors"></div>
+      </section>
     </main>
 
     <script>
+      function buildRow(cells) {
+        const tr = document.createElement('tr');
+        cells.forEach(text => {
+          const td = document.createElement('td');
+          td.textContent = text ?? '';
+          tr.appendChild(td);
+        });
+        return tr;
+      }
+
       async function fetchEmployees() {
         const res = await fetch('/api/employees');
         const data = await res.json();
+        document.getElementById('stat-employees').textContent = Array.isArray(data) ? data.length : '0';
         const container = document.getElementById('employees');
+        container.innerHTML = '';
         if (!Array.isArray(data) || data.length === 0) {
-          container.innerHTML = '<p>No records yet.</p>';
+          const p = document.createElement('p');
+          p.textContent = 'No records yet.';
+          container.appendChild(p);
           return;
         }
         const table = document.createElement('table');
         const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>ID</th><th>Name</th><th>Email</th><th>Department</th></tr>';
+        thead.appendChild(buildRow(['ID', 'Name', 'Email', 'Department']));
+        thead.querySelectorAll('td').forEach(td => {
+          const th = document.createElement('th');
+          th.textContent = td.textContent;
+          td.replaceWith(th);
+        });
         table.appendChild(thead);
         const tbody = document.createElement('tbody');
-        data.forEach(r => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${r.id ?? ''}</td><td>${r.name}</td><td>${r.email}</td><td>${r.department}</td>`;
+        data.forEach(r => tbody.appendChild(buildRow([r.id, r.name, r.email, r.department])));
+        table.appendChild(tbody);
+        const wrap = document.createElement('div');
+        wrap.className = 'table-scroll';
+        wrap.appendChild(table);
+        container.appendChild(wrap);
+      }
+
+      function severityBadge(severity) {
+        const span = document.createElement('span');
+        span.textContent = severity || 'UNKNOWN';
+        span.className = `badge badge-${(severity || 'unknown').toLowerCase()}`;
+        return span;
+      }
+
+      async function fetchErrors() {
+        const container = document.getElementById('errors');
+        container.innerHTML = '';
+        let data;
+        try {
+          const res = await fetch('/api/errors');
+          data = await res.json();
+        } catch (e) {
+          const p = document.createElement('p');
+          p.textContent = `Failed to load errors: ${e}`;
+          container.appendChild(p);
+          return;
+        }
+        const errors = data.errors || [];
+        document.getElementById('stat-errors').textContent = data.total ?? errors.length;
+        document.getElementById('stat-high').textContent = data.high_severity_recent ?? '0';
+        document.getElementById('stat-autofix').textContent = data.auto_fixable_recent ?? '0';
+
+        if (errors.length === 0) {
+          const p = document.createElement('p');
+          p.textContent = 'No errors logged yet.';
+          container.appendChild(p);
+          return;
+        }
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        thead.appendChild(buildRow(['ID', 'Category', 'Severity', 'Auto-fixable', 'Source', 'Message', 'Time']));
+        thead.querySelectorAll('td').forEach(td => {
+          const th = document.createElement('th');
+          th.textContent = td.textContent;
+          td.replaceWith(th);
+        });
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        errors.forEach(err => {
+          const message = err.error_message || '';
+          const truncated = message.length > 90 ? message.slice(0, 90) + '…' : message;
+          const tr = buildRow([err.id, err.category, null, err.auto_fixable ? 'Yes' : 'No', err.source, truncated, err.created_at]);
+          tr.children[2].appendChild(severityBadge(err.severity));
+          tr.children[5].title = message;
           tbody.appendChild(tr);
         });
         table.appendChild(tbody);
-        document.getElementById('employees').innerHTML = '';
-        document.getElementById('employees').appendChild(table);
+        const wrap = document.createElement('div');
+        wrap.className = 'table-scroll';
+        wrap.appendChild(table);
+        container.appendChild(wrap);
       }
 
       async function addEmployee(ev) {
@@ -81,22 +180,24 @@
             body: JSON.stringify(payload)
           });
           if (res.status === 201) {
-            statusEl.textContent = '✅ Added';
+            statusEl.textContent = 'Added';
             ev.target.reset();
             fetchEmployees();
           } else {
             const body = await res.json().catch(() => ({}));
             const category = body.category ? ` (${body.category})` : '';
             const severity = body.severity ? ` [${body.severity}]` : '';
-            statusEl.textContent = `⚠️ ${body.error || 'Failed'}${category}${severity}`;
+            statusEl.textContent = `${body.error || 'Failed'}${category}${severity}`;
+            fetchErrors();
           }
         } catch (e) {
-          statusEl.textContent = `❌ ${e}`;
+          statusEl.textContent = `${e}`;
         }
       }
 
       document.getElementById('add-form').addEventListener('submit', addEmployee);
       fetchEmployees();
+      fetchErrors();
     </script>
   </body>
 </html>

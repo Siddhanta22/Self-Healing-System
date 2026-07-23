@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from dotenv import load_dotenv   #Loads OpenAI API Key & Slack Webhook from .env
 load_dotenv()   # populates os.environ["OPENAI_API_KEY"] from .env
 from langchain_openai import OpenAIEmbeddings
@@ -238,8 +238,14 @@ llm = ChatOpenAI(
 )
 
 # Create RAG chain using LCEL (replaces deprecated RetrievalQA)
-retriever = vectorstore.as_retriever()
-template = """Answer the question based only on the following context. If you cannot answer the question using the context, say so.
+# FAISS L2 distance threshold: empirically calibrated against this index
+# (text-embedding-3-small) — genuinely related past errors score ~0.5,
+# unrelated text scores ~1.9+. Below this, retrieved docs are dropped so a
+# never-seen-before error falls back to the LLM's own knowledge instead of
+# being padded with irrelevant "similar" context.
+RELEVANCE_DISTANCE_THRESHOLD = 1.0
+
+template = """Answer the question using the context below if it's relevant. If the context is empty or not relevant to the question, answer from your own knowledge instead of refusing.
 
 Context: {context}
 
@@ -248,11 +254,15 @@ Question: {question}
 Answer:"""
 prompt = ChatPromptTemplate.from_template(template)
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+def retrieve_with_threshold(query, k=4):
+    results = vectorstore.similarity_search_with_score(query, k=k)
+    relevant_docs = [doc for doc, distance in results if distance <= RELEVANCE_DISTANCE_THRESHOLD]
+    if not relevant_docs:
+        return ""
+    return "\n\n".join(doc.page_content for doc in relevant_docs)
 
 qa = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    {"context": RunnableLambda(retrieve_with_threshold), "question": RunnablePassthrough()}
     | prompt
     | llm
     | StrOutputParser()
@@ -439,6 +449,50 @@ def api_get_employees():
 @app.route('/api/employees', methods=['POST'])
 def api_add_employee():
     return add_employee()
+
+@app.route('/api/errors', methods=['GET'])
+def api_get_errors():
+    """Recent error logs enriched with category/severity for the dashboard"""
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT COUNT(*) as total FROM error_logs;")
+            total = cur.fetchone()['total']
+
+            cur.execute("""
+                SELECT id, error_code, error_message, source, created_at
+                FROM error_logs
+                ORDER BY id DESC
+                LIMIT 20;
+            """)
+            rows = cur.fetchall()
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch errors: {e}"}), 500
+
+    errors = []
+    high_count = 0
+    auto_fixable_count = 0
+    for row in rows:
+        category, severity, auto_fixable = categorize_error(row['error_message'], row['error_code'])
+        if severity == "HIGH":
+            high_count += 1
+        if auto_fixable:
+            auto_fixable_count += 1
+        errors.append({
+            "id": row['id'],
+            "error_code": row['error_code'],
+            "error_message": row['error_message'],
+            "source": row['source'],
+            "created_at": row['created_at'].isoformat() if row['created_at'] else None,
+            "category": category,
+            "severity": severity,
+            "auto_fixable": auto_fixable,
+        })
+    return jsonify({
+        "errors": errors,
+        "total": total,
+        "high_severity_recent": high_count,
+        "auto_fixable_recent": auto_fixable_count,
+    }), 200
 
 @app.route('/api/db-query', methods=['POST'])
 def db_query():

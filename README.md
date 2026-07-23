@@ -73,7 +73,7 @@ Feature	Description
 💬 Intelligent Chatbot	Read-only database queries + context-aware responses
 🌐 Modern Web Frontend	Clean HTML/CSS/JS interface with real-time database statistics
 🔍 Error Categorization	7 error types with severity levels and auto-fixable indicators
-📊 Database Analytics	Real-time stats, query interface, and performance insights
+📊 Database Analytics	Live dashboard with employee/error counts, severity breakdown, and a read-only SQL query interface
 
 🧠 **Built With**
 Backend: Flask, psycopg2, PostgreSQL
@@ -115,10 +115,13 @@ Personal portfolio to showcase full-stack + AI integration skills
 
 ## 🚀 **Future Enhancements**
 
-✅ **Completed**: Migrated from Streamlit to modern HTML/CSS frontend
+✅ **Completed**: Migrated from Streamlit to a single Flask + vanilla JS frontend (removed two duplicate Streamlit implementations)
 ✅ **Completed**: Smart error categorization with expert-level responses
-✅ **Completed**: Read-only database query interface
+✅ **Completed**: Read-only database query interface, restricted to SELECT statements
 ✅ **Completed**: Enhanced Slack notifications with severity levels
+✅ **Completed**: Live error-log dashboard with severity, category, and auto-fixable stats
+✅ **Completed**: Calibrated similarity-threshold filtering so RAG retrieval falls back to the LLM's own knowledge on novel errors instead of forcing irrelevant context
+✅ **Completed**: Fixed a stored XSS vulnerability in the employee records table
 
 ### **Planned Features**
 - **Auto-recovery**: Automatic retry logic for transient errors
@@ -179,6 +182,28 @@ During development, we encountered cascading timeout errors that the AI initiall
 - Slack notifications for real-time monitoring
 - FAISS vector store for error pattern matching
 
+### **Real-World Problem: RAG Retrieval Had No Relevance Threshold**
+
+**The Issue:**
+The FAISS retriever always returned the top-4 nearest vectors regardless of how similar they actually were. For a genuinely novel error type, the LLM still received 4 "similar" historical errors as context even when none of them were actually related — risking a misleading fix instead of a clean, knowledge-based answer.
+
+**Debugging Process:**
+1. **Empirical calibration:** embedded a known near-duplicate error alongside a completely unrelated query and compared the raw FAISS distance scores:
+   ```python
+   vectorstore.similarity_search_with_score(query, k=4)
+   # Related errors:   distance ~ 0.53
+   # Unrelated text:   distance ~ 1.85-2.05
+   ```
+2. **Root cause:** LangChain's default `as_retriever()` has no relevance/score threshold — it always returns the k nearest vectors, no matter how far away they are.
+
+**Solution Implemented:**
+- Replaced the retriever with a custom step (`retrieve_with_threshold`) that discards any match with a distance above `1.0`, a cutoff chosen from the empirical gap between the two clusters above.
+- Updated the prompt so that when nothing passes the threshold, the LLM is explicitly told to answer from its own knowledge instead of refusing.
+
+**Key Learnings:**
+- Default retriever settings don't fail loudly — "no good match" silently becomes "return the 4 least-bad matches," which quietly degrades output quality.
+- Calibrating thresholds empirically, rather than guessing a number, makes the cutoff defensible and tunable later.
+
 🧑‍💻 Developer's Note
 This project is built with ❤️ and a learner's mindset. The goal isn't just to create a working app—but to understand every component deeply: from PostgreSQL locking to vector retrieval and LLM behavior. If you're an aspiring backend engineer, ML developer, or just an automation enthusiast, this system shows what's possible when traditional systems meet modern AI.
 
@@ -228,8 +253,8 @@ python3 db_app.py
 ```
 
 4) **Access the application:**
-- **Dashboard**: `http://127.0.0.1:5000/` - View/add employees
-- **Chatbot**: `http://127.0.0.1:5000/chat` - AI assistant with database queries
+- **Dashboard**: `http://127.0.0.1:5000/` - View/add employees, live error diagnostics
+- **Chatbot**: `http://127.0.0.1:5000/chat` - AI assistant with database queries (also linked directly from each Slack alert)
 
 ## 🎯 **Key Features**
 
@@ -240,8 +265,9 @@ python3 db_app.py
 
 ### **Intelligent Chatbot**
 - **Real-time Database Context**: Automatically includes current stats and recent data
-- **Read-only Query Interface**: Safe database exploration with security controls
+- **Read-only Query Interface**: Query tool restricted to SELECT statements
 - **Expert-level Responses**: Category-specific AI prompts for tailored solutions
+- **Accessed via Slack**: Not exposed as a primary nav item on the dashboard — reached through the "Open the Self-Healing Chatbot" link in each Slack alert, keeping the main UI focused on data entry and diagnostics
 
 ### **Professional Slack Integration**
 - **Enhanced Notifications**: Structured alerts with severity indicators

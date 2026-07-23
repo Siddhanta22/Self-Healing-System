@@ -8,46 +8,74 @@
   </head>
   <body>
     <header class="app-header">
-      <h1>💬 Self-Healing Assistant</h1>
+      <h1>Self-Healing Assistant</h1>
       <nav>
         <a href="/">Dashboard</a>
-        <a href="/chat">Chatbot</a>
       </nav>
     </header>
 
     <main class="container">
       <section class="card">
         <h2>Ask about your errors</h2>
+        <p class="subtitle">Get plain-English explanations and fixes, grounded in your actual error logs.</p>
+
+        <div id="chat-window" class="chat-window">
+          <div class="msg assistant">
+            <div class="bubble">Hi! Ask me about a recent error, a specific error code, or general database stats.</div>
+          </div>
+        </div>
+
         <form id="chat-form">
-          <textarea name="question" placeholder="Ask about an error, database stats, or employees…" rows="4" required></textarea>
+          <div class="chat-input-row">
+            <textarea name="question" placeholder="Ask about an error, database stats, or employees…" rows="2" required></textarea>
+            <button type="submit">Send</button>
+          </div>
           <label class="checkbox">
             <input type="checkbox" name="include_recent" checked /> Include recent error logs as context
           </label>
-          <button type="submit">Send</button>
         </form>
-        <div id="answer" class="answer"></div>
       </section>
-      
-      <section class="card">
-        <h2>Database Query (Read-Only)</h2>
+
+      <details class="advanced">
+        <summary>Advanced: run a read-only SQL query</summary>
         <form id="query-form">
           <textarea name="query" placeholder="SELECT COUNT(*) FROM employee;" rows="3" required></textarea>
           <button type="submit">Execute Query</button>
         </form>
         <div id="query-result" class="answer"></div>
-      </section>
+      </details>
     </main>
 
     <script>
+      const chatWindow = document.getElementById('chat-window');
+
+      function appendMessage(role, text, isError) {
+        const msg = document.createElement('div');
+        msg.className = `msg ${role}${isError ? ' error' : ''}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = text;
+        msg.appendChild(bubble);
+        chatWindow.appendChild(msg);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        return bubble;
+      }
+
       async function sendChat(ev) {
         ev.preventDefault();
         const fd = new FormData(ev.target);
+        const question = fd.get('question');
+        if (!question) return;
         const payload = {
-          question: fd.get('question'),
+          question,
           include_recent: fd.get('include_recent') === 'on'
         };
-        const ans = document.getElementById('answer');
-        ans.textContent = 'Thinking…';
+
+        appendMessage('user', question);
+        ev.target.reset();
+        ev.target.querySelector('input[name="include_recent"]').checked = true;
+        const thinkingBubble = appendMessage('assistant', 'Thinking…');
+
         try {
           const res = await fetch('/api/chat', {
             method: 'POST',
@@ -56,12 +84,14 @@
           });
           const body = await res.json();
           if (res.ok) {
-            ans.textContent = body.answer;
+            thinkingBubble.textContent = body.answer;
           } else {
-            ans.textContent = `❌ ${body.error || 'chat failed'}`;
+            thinkingBubble.parentElement.classList.add('error');
+            thinkingBubble.textContent = `${body.error || 'chat failed'}`;
           }
         } catch (e) {
-          ans.textContent = `❌ ${e}`;
+          thinkingBubble.parentElement.classList.add('error');
+          thinkingBubble.textContent = `${e}`;
         }
       }
 
@@ -82,10 +112,10 @@
             const data = JSON.stringify(body.result, null, 2);
             result.textContent = `Rows: ${body.row_count}\n\n${data}`;
           } else {
-            result.textContent = `❌ ${body.error || 'query failed'}`;
+            result.textContent = `${body.error || 'query failed'}`;
           }
         } catch (e) {
-          result.textContent = `❌ ${e}`;
+          result.textContent = `${e}`;
         }
       }
 
