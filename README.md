@@ -37,7 +37,7 @@ It's not just about logging errors—it's about healing your system intelligentl
 ```mermaid
 graph TD
     A[Client] --> B[Application Layer<br/>Frontend + Backend]
-    B --> C[View / Update Records]
+    B --> C[View / Add Records]
     B --> D[DBMS<br/>PostgreSQL]
     B --> E[Error Logger]
     D --> E
@@ -58,13 +58,13 @@ graph TD
 
 ### **Pipeline Flow:**
 1. **Set up the application** (frontend + backend) connected to PostgreSQL
-2. **Handle database operations** (view/update) and use error loggers to catch real-time errors
+2. **Handle database operations** (view/add) and use error loggers to catch real-time errors
 3. **Store embedding** of these error messages
 4. **Convert errors into vector embeddings** and store them in a Vector DB
 5. **Use an LLM API** to convert technical errors into plain English + solution
 6. **Send the response to Slack** with explanation and fix
 
-🔍** Core Capabilities**
+🔍 **Core Capabilities**
 Feature	Description
 🤖 AI-Powered Debugging	GPT-3.5 interprets and explains database errors with category-specific expertise
 🧠 LangChain + FAISS Integration	Learns from past issues to identify similar ones
@@ -225,15 +225,17 @@ CREATE TABLE employee (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
-  department TEXT NOT NULL
+  department TEXT,
+  joining_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE error_logs (
   id SERIAL PRIMARY KEY,
   error_code TEXT,
-  error_message TEXT,
+  error_message TEXT NOT NULL,
   source TEXT,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  severity TEXT -- reserved; severity is computed live, not currently persisted here
 );
 ```
 
