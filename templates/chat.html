@@ -15,9 +15,11 @@
     </header>
 
     <main class="container">
-      <section class="card">
-        <h2>Ask about your errors</h2>
-        <p class="subtitle">Get plain-English explanations and fixes, grounded in your actual error logs.</p>
+      <section class="card chat-card">
+        <div class="chat-card-header">
+          <h2>Ask about your errors</h2>
+          <button type="button" id="context-toggle" class="toggle-chip on">Using recent error logs</button>
+        </div>
 
         <div id="chat-window" class="chat-window">
           <div class="msg assistant">
@@ -27,12 +29,9 @@
 
         <form id="chat-form">
           <div class="chat-input-row">
-            <textarea name="question" placeholder="Ask about an error, database stats, or employees…" rows="2" required></textarea>
+            <textarea name="question" id="question-input" placeholder="Ask about an error, database stats, or employees…" rows="1" required></textarea>
             <button type="submit">Send</button>
           </div>
-          <label class="checkbox">
-            <input type="checkbox" name="include_recent" checked /> Include recent error logs as context
-          </label>
         </form>
       </section>
 
@@ -48,6 +47,14 @@
 
     <script>
       const chatWindow = document.getElementById('chat-window');
+
+      let includeRecent = true;
+      const contextToggle = document.getElementById('context-toggle');
+      contextToggle.addEventListener('click', () => {
+        includeRecent = !includeRecent;
+        contextToggle.classList.toggle('on', includeRecent);
+        contextToggle.textContent = includeRecent ? 'Using recent error logs' : 'Not using recent error logs';
+      });
 
       function appendMessage(role, text, isError) {
         const msg = document.createElement('div');
@@ -68,12 +75,11 @@
         if (!question) return;
         const payload = {
           question,
-          include_recent: fd.get('include_recent') === 'on'
+          include_recent: includeRecent
         };
 
         appendMessage('user', question);
         ev.target.reset();
-        ev.target.querySelector('input[name="include_recent"]').checked = true;
         const thinkingBubble = appendMessage('assistant', 'Thinking…');
 
         try {
@@ -120,6 +126,12 @@
       }
 
       document.getElementById('chat-form').addEventListener('submit', sendChat);
+      document.getElementById('question-input').addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          ev.preventDefault();
+          document.getElementById('chat-form').requestSubmit();
+        }
+      });
       document.getElementById('query-form').addEventListener('submit', executeQuery);
     </script>
   </body>
