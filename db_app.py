@@ -221,7 +221,8 @@ def handle_error_intelligently(error_msg: str, error_code: str, source: str = "u
 {emoji_map.get(severity, "⚠️")} *{category} Error* (Severity: {severity})
 *Error Code:* `{error_code}`
 *Source:* `{source}`
-*Error Details:* `{error_msg}`
+*Error Details:*
+```{error_msg}```
 *Auto-fixable:* {'Yes' if auto_fixable else 'No'}
 
 *Expert Analysis:*
@@ -428,7 +429,14 @@ def add_employee():  # add a new employee to the database
     except psycopg2.errors.LockNotAvailable as e:  # Handle table lock error
         conn.rollback()
         if e.pgcode == errorcodes.LOCK_NOT_AVAILABLE:  # Check if the error is due to a table lock
-            error_msg = f"Table lock detected: {e}"
+            # Postgres truncates the "LINE 1: ..." context it echoes back in
+            # the exception (e.g. "VALUES ('Form...''), so build our own
+            # complete message from the actual attempted values instead of
+            # relying on that truncated snippet.
+            error_msg = (
+                f"Table lock detected while inserting employee "
+                f"(name={name!r}, email={email!r}, department={department!r}): {e}"
+            )
             error_code = "LOCK_NOT_AVAILABLE"
         else:
             error_msg = str(e)  # For any other psycopg2 error
