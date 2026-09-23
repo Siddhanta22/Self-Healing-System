@@ -33,25 +33,57 @@ def send_slack_message(message: str):   # Function to send messages to Slack
     except Exception as e:
         print("Slack webhook failed:", e)
 
-def categorize_error(error_msg: str, error_code: str = "UNKNOWN"):
-    """Smart error categorization with pattern matching"""
+# Maps PostgreSQL's standardized SQLSTATE codes to (category, severity,
+# auto_fixable). SQLSTATE is unambiguous and version/locale-independent,
+# unlike matching keywords in the free-text error message — e.g. a lock
+# timeout's message contains both "lock" and "timeout", which previously
+# caused it to be misclassified as CONNECTION_ISSUE depending on which
+# keyword check happened to run first.
+SQLSTATE_CATEGORY_MAP = {
+    errorcodes.UNIQUE_VIOLATION: ("DUPLICATE_DATA", "LOW", True),
+    errorcodes.LOCK_NOT_AVAILABLE: ("LOCK_CONTENTION", "MEDIUM", False),
+    errorcodes.DEADLOCK_DETECTED: ("LOCK_CONTENTION", "MEDIUM", False),
+    errorcodes.INSUFFICIENT_PRIVILEGE: ("PERMISSION_ERROR", "HIGH", False),
+    errorcodes.INVALID_AUTHORIZATION_SPECIFICATION: ("PERMISSION_ERROR", "HIGH", False),
+    errorcodes.SYNTAX_ERROR: ("QUERY_SYNTAX", "MEDIUM", False),
+    errorcodes.FOREIGN_KEY_VIOLATION: ("CONSTRAINT_VIOLATION", "MEDIUM", False),
+    errorcodes.NOT_NULL_VIOLATION: ("CONSTRAINT_VIOLATION", "MEDIUM", False),
+    errorcodes.CHECK_VIOLATION: ("CONSTRAINT_VIOLATION", "MEDIUM", False),
+    errorcodes.OUT_OF_MEMORY: ("RESOURCE_EXHAUSTION", "HIGH", False),
+    errorcodes.TOO_MANY_CONNECTIONS: ("RESOURCE_EXHAUSTION", "HIGH", False),
+    errorcodes.DISK_FULL: ("RESOURCE_EXHAUSTION", "HIGH", False),
+    errorcodes.CONNECTION_EXCEPTION: ("CONNECTION_ISSUE", "HIGH", True),
+    errorcodes.CONNECTION_DOES_NOT_EXIST: ("CONNECTION_ISSUE", "HIGH", True),
+    errorcodes.CONNECTION_FAILURE: ("CONNECTION_ISSUE", "HIGH", True),
+    errorcodes.SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION: ("CONNECTION_ISSUE", "HIGH", True),
+}
+
+def categorize_error(error_msg: str, error_code: str = "UNKNOWN", pgcode: str = None):
+    """Categorize an error using PostgreSQL's SQLSTATE code when available.
+    Falls back to keyword matching only for errors with no SQLSTATE (e.g.
+    a non-Postgres Python exception)."""
+    if pgcode and pgcode in SQLSTATE_CATEGORY_MAP:
+        return SQLSTATE_CATEGORY_MAP[pgcode]
+
     error_lower = error_msg.lower()
-    
-    # Common database patterns
+
+    # Fallback pattern matching — ordered so specific, less ambiguous terms
+    # (lock, deadlock) are checked before generic ones (connection, timeout)
+    # that can appear as a side effect of an unrelated failure.
     if "duplicate key" in error_lower or "unique constraint" in error_lower:
         return "DUPLICATE_DATA", "LOW", True
-    elif "connection" in error_lower or "timeout" in error_lower or "connection refused" in error_lower:
-        return "CONNECTION_ISSUE", "HIGH", True
-    elif "lock" in error_lower or "deadlock" in error_lower or "lock not available" in error_lower:
+    elif "lock" in error_lower or "deadlock" in error_lower:
         return "LOCK_CONTENTION", "MEDIUM", False
     elif "permission" in error_lower or "access denied" in error_lower or "insufficient privilege" in error_lower:
         return "PERMISSION_ERROR", "HIGH", False
-    elif "syntax" in error_lower or "invalid" in error_lower or "malformed" in error_lower:
+    elif "syntax" in error_lower or "malformed" in error_lower:
         return "QUERY_SYNTAX", "MEDIUM", False
     elif "foreign key" in error_lower or "constraint" in error_lower:
         return "CONSTRAINT_VIOLATION", "MEDIUM", False
-    elif "out of memory" in error_lower or "memory" in error_lower:
+    elif "out of memory" in error_lower or "too many connections" in error_lower:
         return "RESOURCE_EXHAUSTION", "HIGH", False
+    elif "connection" in error_lower or "connection refused" in error_lower:
+        return "CONNECTION_ISSUE", "HIGH", True
     else:
         return "UNKNOWN", "MEDIUM", False
 
@@ -166,11 +198,11 @@ def get_category_specific_prompt(category: str, error_msg: str):
     
     return prompts.get(category, prompts["UNKNOWN"])
 
-def handle_error_intelligently(error_msg: str, error_code: str, source: str = "unknown"):
+def handle_error_intelligently(error_msg: str, error_code: str, source: str = "unknown", pgcode: str = None):
     """Smart error handling with category-aware responses"""
-    
+
     # Step 1: Categorize the error
-    category, severity, auto_fixable = categorize_error(error_msg, error_code)
+    category, severity, auto_fixable = categorize_error(error_msg, error_code, pgcode)
     
     # Step 2: Get tailored explanation from LLM
     try:
@@ -389,7 +421,7 @@ def add_employee():  # add a new employee to the database
         vectorstore.save_local("faiss_index")  
 
         # Use intelligent error handling
-        category, severity, auto_fixable = handle_error_intelligently(error_msg, "DUPLICATE_KEY", "add_employee")
+        category, severity, auto_fixable = handle_error_intelligently(error_msg, "DUPLICATE_KEY", "add_employee", pgcode=e.pgcode)
 
         return jsonify({"error": "Duplicate email. Logged in error_logs.", "category": category, "severity": severity}), 409   # Conflict
 
@@ -415,7 +447,7 @@ def add_employee():  # add a new employee to the database
         vectorstore.save_local("faiss_index")
 
         # Use intelligent error handling
-        category, severity, auto_fixable = handle_error_intelligently(error_msg, error_code, "add_employee")
+        category, severity, auto_fixable = handle_error_intelligently(error_msg, error_code, "add_employee", pgcode=e.pgcode)
 
         return jsonify({"error": "Table is locked by another transaction.", "category": category, "severity": severity}), 503 # Service Unavailable
 
@@ -436,9 +468,10 @@ def add_employee():  # add a new employee to the database
         vectorstore.add_documents([doc])
         vectorstore.save_local("faiss_index")
 
-        # Use intelligent error handling
-        category, severity, auto_fixable = handle_error_intelligently(error_msg, error_code, "add_employee")
-        
+        # Use intelligent error handling — this catch-all isn't guaranteed to be a
+        # psycopg2 error, so pgcode may not exist on it at all.
+        category, severity, auto_fixable = handle_error_intelligently(error_msg, error_code, "add_employee", pgcode=getattr(e, "pgcode", None))
+
         return jsonify({"error": f"Unexpected error: {e}", "category": category, "severity": severity}), 500   # Internal Server Error
 
 # API aliases used by the new frontend (keeps legacy routes too)
