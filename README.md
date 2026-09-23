@@ -144,6 +144,20 @@ During development, cascading timeout errors were initially misdiagnosed as miss
 - Slack notifications for real-time monitoring
 - FAISS vector store for error pattern matching
 
+### Real-World Problem: Keyword Classification Misfiled Lock Timeouts
+
+**The Issue:**
+While demo-testing, a lock-timeout error ("canceling statement due to lock timeout") was classified as `CONNECTION_ISSUE` instead of `LOCK_CONTENTION`. The message contains both "lock" and "timeout", and the old classifier was an `if/elif` chain over substrings that checked connection keywords first. The damage compounded: the wrong category selected the wrong prompt template, so the LLM confidently gave network/firewall/credential advice for what was a table lock.
+
+**Solution Implemented:**
+- Classification now keys on PostgreSQL's SQLSTATE code (`e.pgcode`) via an exact-match lookup table (`SQLSTATE_CATEGORY_MAP`), which is unambiguous and independent of message wording.
+- Keyword matching remains only as a fallback, now using whole-word matching. A second, related failure surfaced during verification: an unrelated error ending in "transaction **block**" was matching "lock" as a substring.
+- Fixed a related reliability bug found while testing: one failing statement left the app's shared database connection in an aborted transaction, so every later request failed until restart. Each request now ends any unfinished transaction.
+
+**Key Learnings:**
+- Substring matching over free-text messages is fragile; prefer structured error codes when the system provides them.
+- A wrong classification doesn't just mislabel — it steers everything downstream (prompt choice, LLM advice, alert severity).
+
 ### Real-World Problem: RAG Retrieval Had No Relevance Threshold
 
 **The Issue:**
@@ -226,7 +240,7 @@ python3 db_app.py
 
 ### Smart Error Handling
 - **7 error categories**: DUPLICATE_DATA, CONNECTION_ISSUE, LOCK_CONTENTION, PERMISSION_ERROR, QUERY_SYNTAX, CONSTRAINT_VIOLATION, RESOURCE_EXHAUSTION
-- **Severity levels**: LOW, MEDIUM, HIGH — assigned deterministically via keyword rules, not the LLM
+- **Severity levels**: LOW, MEDIUM, HIGH — assigned deterministically, not by the LLM. Classification is an exact lookup on PostgreSQL's standardized SQLSTATE error code; whole-word keyword matching on the message is only a fallback for errors that carry no SQLSTATE
 - **Auto-fixable detection**: flags errors that could plausibly be resolved automatically (not yet wired to any automated action)
 
 ### Intelligent Chatbot

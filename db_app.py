@@ -13,6 +13,7 @@ from dotenv import load_dotenv   #Loads OpenAI API Key & Slack Webhook from .env
 load_dotenv()   # populates os.environ["OPENAI_API_KEY"] from .env
 from langchain_openai import OpenAIEmbeddings
 import os
+import re
 
 CHATBOT_URL = os.getenv("CHATBOT_URL", "http://127.0.0.1:5000/chat")
 
@@ -67,22 +68,27 @@ def categorize_error(error_msg: str, error_code: str = "UNKNOWN", pgcode: str = 
 
     error_lower = error_msg.lower()
 
+    def has(*terms):
+        # Whole-word match (allowing simple suffixes): a bare substring test
+        # made "lock" match inside "block" ("...end of transaction block"),
+        # misclassifying unrelated errors as lock contention.
+        return any(re.search(rf"\b{re.escape(t)}(?:s|ed|ing)?\b", error_lower) for t in terms)
+
     # Fallback pattern matching — ordered so specific, less ambiguous terms
-    # (lock, deadlock) are checked before generic ones (connection, timeout)
-    # that can appear as a side effect of an unrelated failure.
-    if "duplicate key" in error_lower or "unique constraint" in error_lower:
+    # (lock, deadlock) are checked before generic ones (connection).
+    if has("duplicate key", "unique constraint"):
         return "DUPLICATE_DATA", "LOW", True
-    elif "lock" in error_lower or "deadlock" in error_lower:
+    elif has("lock", "deadlock"):
         return "LOCK_CONTENTION", "MEDIUM", False
-    elif "permission" in error_lower or "access denied" in error_lower or "insufficient privilege" in error_lower:
+    elif has("permission", "access denied", "insufficient privilege"):
         return "PERMISSION_ERROR", "HIGH", False
-    elif "syntax" in error_lower or "malformed" in error_lower:
+    elif has("syntax", "malformed"):
         return "QUERY_SYNTAX", "MEDIUM", False
-    elif "foreign key" in error_lower or "constraint" in error_lower:
+    elif has("foreign key", "constraint"):
         return "CONSTRAINT_VIOLATION", "MEDIUM", False
-    elif "out of memory" in error_lower or "too many connections" in error_lower:
+    elif has("out of memory", "too many connections"):
         return "RESOURCE_EXHAUSTION", "HIGH", False
-    elif "connection" in error_lower or "connection refused" in error_lower:
+    elif has("connection", "connection refused"):
         return "CONNECTION_ISSUE", "HIGH", True
     else:
         return "UNKNOWN", "MEDIUM", False
@@ -250,6 +256,16 @@ else:
     )
 with conn.cursor() as cur:
     cur.execute("SET lock_timeout = '5s';")  # Set a lock timeout to avoid long waits on locks
+conn.commit()  # persist the SET; an uncommitted SET is reverted by any later rollback()
+
+@app.teardown_request
+def reset_shared_connection(exc):
+    # The app shares one connection. A failed statement leaves it in an aborted
+    # transaction where every later query fails ("current transaction is
+    # aborted"), and even successful reads leave a transaction open. End any
+    # unfinished transaction after each request; writes already committed.
+    if conn.info.transaction_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+        conn.rollback()
 
 embedder = OpenAIEmbeddings(
      model="text-embedding-3-small",
