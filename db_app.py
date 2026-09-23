@@ -429,13 +429,14 @@ def add_employee():  # add a new employee to the database
     except psycopg2.errors.LockNotAvailable as e:  # Handle table lock error
         conn.rollback()
         if e.pgcode == errorcodes.LOCK_NOT_AVAILABLE:  # Check if the error is due to a table lock
-            # Postgres truncates the "LINE 1: ..." context it echoes back in
-            # the exception (e.g. "VALUES ('Form...''), so build our own
-            # complete message from the actual attempted values instead of
-            # relying on that truncated snippet.
+            # str(e) includes Postgres's own truncated "LINE 1: ..." echo of
+            # the statement (e.g. "VALUES ('Form..."), which is both
+            # incomplete and now redundant once we include the real values
+            # below -- use just the primary message and drop that noise.
+            primary = e.diag.message_primary or str(e).splitlines()[0]
             error_msg = (
                 f"Table lock detected while inserting employee "
-                f"(name={name!r}, email={email!r}, department={department!r}): {e}"
+                f"(name={name!r}, email={email!r}, department={department!r}): {primary}"
             )
             error_code = "LOCK_NOT_AVAILABLE"
         else:
