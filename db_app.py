@@ -361,21 +361,24 @@ def chat_api():
             cur.execute("SELECT COUNT(*) as error_count FROM error_logs;")
             error_count = cur.fetchone()['error_count']
             
-            # Get recent errors
-            cur.execute("""
-                SELECT id, error_code, error_message, source, created_at
-                FROM error_logs
-                ORDER BY id DESC
-                LIMIT 10;
-            """)
-            recent_errors = cur.fetchall()
+            # Recent error rows are only included when the UI toggle is on
+            recent_errors = []
+            if include_recent:
+                cur.execute("""
+                    SELECT id, error_code, error_message, source, created_at
+                    FROM error_logs
+                    ORDER BY id DESC
+                    LIMIT 10;
+                """)
+                recent_errors = cur.fetchall()
             
             db_context = f"""Database Context:
 - Total employees: {emp_count}
 - Total errors logged: {error_count}
 - Recent employees: {[dict(emp) for emp in recent_emps]}
-- Recent errors: {[dict(err) for err in recent_errors]}
 """
+            if include_recent:
+                db_context += f"- Recent errors: {[dict(err) for err in recent_errors]}\n"
     except Exception as e:
         db_context = f"Database context unavailable: {str(e)}"
 
